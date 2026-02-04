@@ -843,12 +843,13 @@
       return cell;
     }
 
-    function createInputCell(value, placeholder, onInput) {
+    function createInputCell(value, placeholder, onInput, disabled = false) {
       const input = document.createElement("input");
       input.className = "input-field";
       input.type = "text";
       input.value = value || "";
       input.placeholder = placeholder || "";
+      input.disabled = disabled;
       input.addEventListener("input", (e) => onInput(e.target.value));
       return input;
     }
@@ -877,7 +878,7 @@
 
       const newIdCell = document.createElement("td");
       newIdCell.dataset.label = "Task ID";
-      newIdCell.append(createInputCell(newTask.task_id, "BatStateU010", (v) => { newTask.task_id = v; }));
+      newIdCell.append(createInputCell("", "Auto (generated)", () => {}, true));
       newRow.append(newIdCell);
 
       const newNameCell = document.createElement("td");
@@ -1104,7 +1105,14 @@
         const value = task[key] || "";
         if (editable) {
           div.innerHTML = `<span>${label}</span>`;
-          if (key === "category" || key === "priority" || key === "status") {
+          if (key === "task_id" && modalMode === "new") {
+            const input = document.createElement("input");
+            input.className = "input-field";
+            input.value = "";
+            input.placeholder = "Auto (generated)";
+            input.disabled = true;
+            div.append(input);
+          } else if (key === "category" || key === "priority" || key === "status") {
             const options = key === "category" ? categoryOptions : key === "priority" ? priorityOptions : statusOptions;
             const select = document.createElement("select");
             select.className = "input-field";
