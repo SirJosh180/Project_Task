@@ -1,3 +1,4 @@
+const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const { Pool } = require("pg");
@@ -5,15 +6,36 @@ const { Pool } = require("pg");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const envPath = path.join(__dirname, ".env");
+if (fs.existsSync(envPath)) {
+  const contents = fs.readFileSync(envPath, "utf8");
+  contents.split(/\r?\n/).forEach((line) => {
+    if (!line || line.trim().startsWith("#")) return;
+    const [key, ...rest] = line.split("=");
+    if (!key) return;
+    const value = rest.join("=").trim();
+    if (!process.env[key]) {
+      process.env[key] = value.replace(/^"(.*)"$/, "$1");
+    }
+  });
+}
+
 const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 if (!connectionString) {
   throw new Error("Missing DATABASE_URL or POSTGRES_URL environment variable.");
 }
 
 const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL;
+let isSupabaseHost = false;
+try {
+  const parsed = new URL(connectionString);
+  isSupabaseHost = parsed.hostname.includes("supabase.com");
+} catch (error) {
+  isSupabaseHost = false;
+}
 const pool = new Pool({
   connectionString,
-  ssl: isProduction ? { rejectUnauthorized: false } : undefined
+  ssl: isProduction || isSupabaseHost ? { rejectUnauthorized: false } : undefined
 });
 
 app.use(express.json());
@@ -224,9 +246,21 @@ app.get("/api/tasks", async (req, res) => {
   }
 });
 
+async function getNextTaskId() {
+  const result = await pool.query(
+    `SELECT MAX((regexp_match(task_id, '(\\d+)$'))[1]::int) AS max_id
+     FROM tasks
+     WHERE task_id LIKE 'BatStateU%' AND task_id ~ '\\d+$'`
+  );
+  const maxId = result.rows[0]?.max_id || 0;
+  const next = Math.max(maxId + 1, 14);
+  return `BatStateU${String(next).padStart(3, "0")}`;
+}
+
 app.post("/api/tasks", async (req, res) => {
   try {
     const task = req.body || {};
+    task.task_id = await getNextTaskId();
     const values = [
       task.task_id || "",
       task.name || "",
