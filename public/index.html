@@ -1045,6 +1045,8 @@
       const startDateFilter = filterStartDate.value;
 
       const filtered = tasks.filter((t) => {
+        const statusText = String(t.status || "").toLowerCase();
+        if (statusText.includes("done") || statusText.includes("submitted")) return false;
         const haystack = `${t.task_id} ${t.name} ${t.description} ${t.remarks}`.toLowerCase();
         if (q && !haystack.includes(q)) return false;
         if (cat && t.category !== cat) return false;
