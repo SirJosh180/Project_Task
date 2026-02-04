@@ -183,7 +183,7 @@ function initDb() {
 }
 
 app.get("/api/tasks", (req, res) => {
-  db.all("SELECT * FROM tasks ORDER BY id ASC", (err, rows) => {
+  db.all("SELECT * FROM tasks ORDER BY id DESC", (err, rows) => {
     if (err) {
       res.status(500).json({ error: "Failed to fetch tasks" });
       return;
