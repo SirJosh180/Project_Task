@@ -548,6 +548,7 @@
       <input id="filterStartDate" type="date" />
       <button id="compactToggle" type="button">Compact View: Off</button>
       <button id="resetBtn" type="button">Reload from Database</button>
+      <button id="toggleCompletedBtn" type="button">Show Done & Submitted: Off</button>
     </div>
 
   <div class="table-wrap">
@@ -618,6 +619,7 @@
     const lastUpdated = document.getElementById("lastUpdated");
     const compactToggle = document.getElementById("compactToggle");
     const resetBtn = document.getElementById("resetBtn");
+    const toggleCompletedBtn = document.getElementById("toggleCompletedBtn");
     const detailModal = document.getElementById("detailModal");
     const detailBody = document.getElementById("detailBody");
     const detailSubtitle = document.getElementById("detailSubtitle");
@@ -633,6 +635,7 @@
     let modalTask = null;
     let modalMode = "view";
     let deadlineStats = { overdue: 0, dueSoon: 0 };
+    let showCompleted = false;
 
     function setLastUpdated() {
       lastUpdated.textContent = `Updated: ${new Date().toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" })}`;
@@ -1046,7 +1049,12 @@
 
       const filtered = tasks.filter((t) => {
         const statusText = String(t.status || "").toLowerCase();
-        if (statusText.includes("done") || statusText.includes("submitted")) return false;
+        const isCompleted = statusText.includes("done") || statusText.includes("submitted");
+        if (showCompleted) {
+          if (!isCompleted) return false;
+        } else {
+          if (isCompleted) return false;
+        }
         const haystack = `${t.task_id} ${t.name} ${t.description} ${t.remarks}`.toLowerCase();
         if (q && !haystack.includes(q)) return false;
         if (cat && t.category !== cat) return false;
@@ -1067,6 +1075,11 @@
     compactToggle.addEventListener("click", () => {
       isCompact = !isCompact;
       applyCompactState();
+    });
+    toggleCompletedBtn.addEventListener("click", () => {
+      showCompleted = !showCompleted;
+      toggleCompletedBtn.textContent = `Show Done & Submitted: ${showCompleted ? "On" : "Off"}`;
+      applyFilters();
     });
 
     function renderDetailModal(task, editable) {
