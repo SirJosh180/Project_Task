@@ -1,12 +1,20 @@
 const path = require("path");
 const express = require("express");
-const sqlite3 = require("sqlite3").verbose();
+const { Pool } = require("pg");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const DB_PATH = path.join(__dirname, "data", "tasks.db");
-const db = new sqlite3.Database(DB_PATH);
+const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+if (!connectionString) {
+  throw new Error("Missing DATABASE_URL or POSTGRES_URL environment variable.");
+}
+
+const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL;
+const pool = new Pool({
+  connectionString,
+  ssl: isProduction ? { rejectUnauthorized: false } : undefined
+});
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
@@ -131,11 +139,13 @@ const DEFAULT_TASKS = [
   }
 ];
 
+let dbInitPromise = null;
 function initDb() {
-  db.serialize(() => {
-    db.run(
+  if (dbInitPromise) return dbInitPromise;
+  dbInitPromise = (async () => {
+    await pool.query(
       `CREATE TABLE IF NOT EXISTS tasks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         task_id TEXT,
         name TEXT,
         description TEXT,
@@ -150,157 +160,182 @@ function initDb() {
       )`
     );
 
-    db.get("SELECT COUNT(*) AS count FROM tasks", (err, row) => {
-      if (err) {
-        console.error("Failed to count tasks", err);
-        return;
-      }
-      if (row.count === 0) {
-        const stmt = db.prepare(
-          `INSERT INTO tasks
-          (task_id, name, description, category, priority, status, start_date, due_date, est_time, act_time, remarks)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    const countResult = await pool.query("SELECT COUNT(*)::int AS count FROM tasks");
+    if (countResult.rows[0].count === 0) {
+      const columns = [
+        "task_id",
+        "name",
+        "description",
+        "category",
+        "priority",
+        "status",
+        "start_date",
+        "due_date",
+        "est_time",
+        "act_time",
+        "remarks"
+      ];
+      const values = [];
+      const rows = DEFAULT_TASKS.map((task, rowIndex) => {
+        const base = rowIndex * columns.length;
+        values.push(
+          task.task_id,
+          task.name,
+          task.description,
+          task.category,
+          task.priority,
+          task.status,
+          task.start_date,
+          task.due_date,
+          task.est_time,
+          task.act_time,
+          task.remarks
         );
-        DEFAULT_TASKS.forEach((task) => {
-          stmt.run(
-            task.task_id,
-            task.name,
-            task.description,
-            task.category,
-            task.priority,
-            task.status,
-            task.start_date,
-            task.due_date,
-            task.est_time,
-            task.act_time,
-            task.remarks
-          );
-        });
-        stmt.finalize();
-      }
-    });
-  });
+        const placeholders = columns.map((_, colIndex) => `$${base + colIndex + 1}`);
+        return `(${placeholders.join(", ")})`;
+      });
+
+      await pool.query(
+        `INSERT INTO tasks (${columns.join(", ")}) VALUES ${rows.join(", ")}`,
+        values
+      );
+    }
+  })();
+  return dbInitPromise;
 }
 
-app.get("/api/tasks", (req, res) => {
-  db.all("SELECT * FROM tasks ORDER BY id DESC", (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: "Failed to fetch tasks" });
+app.use("/api", async (req, res, next) => {
+  try {
+    await initDb();
+    next();
+  } catch (error) {
+    console.error("Failed to initialize database", error);
+    res.status(500).json({ error: "Failed to initialize database" });
+  }
+});
+
+app.get("/api/tasks", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM tasks ORDER BY id DESC");
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Failed to fetch tasks", error);
+    res.status(500).json({ error: "Failed to fetch tasks" });
+  }
+});
+
+app.post("/api/tasks", async (req, res) => {
+  try {
+    const task = req.body || {};
+    const values = [
+      task.task_id || "",
+      task.name || "",
+      task.description || "",
+      task.category || "",
+      task.priority || "",
+      task.status || "",
+      task.start_date || "",
+      task.due_date || "",
+      task.est_time || "",
+      task.act_time || "",
+      task.remarks || ""
+    ];
+
+    const result = await pool.query(
+      `INSERT INTO tasks
+      (task_id, name, description, category, priority, status, start_date, due_date, est_time, act_time, remarks)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *`,
+      values
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("Failed to create task", error);
+    res.status(500).json({ error: "Failed to create task" });
+  }
+});
+
+app.put("/api/tasks/:id", async (req, res) => {
+  const taskId = Number(req.params.id);
+  if (!taskId) {
+    res.status(400).json({ error: "Invalid task id" });
+    return;
+  }
+
+  try {
+    const task = req.body || {};
+    const values = [
+      task.task_id || "",
+      task.name || "",
+      task.description || "",
+      task.category || "",
+      task.priority || "",
+      task.status || "",
+      task.start_date || "",
+      task.due_date || "",
+      task.est_time || "",
+      task.act_time || "",
+      task.remarks || "",
+      taskId
+    ];
+
+    const result = await pool.query(
+      `UPDATE tasks SET
+        task_id = $1,
+        name = $2,
+        description = $3,
+        category = $4,
+        priority = $5,
+        status = $6,
+        start_date = $7,
+        due_date = $8,
+        est_time = $9,
+        act_time = $10,
+        remarks = $11
+      WHERE id = $12
+      RETURNING *`,
+      values
+    );
+
+    if (!result.rows[0]) {
+      res.status(404).json({ error: "Task not found" });
       return;
     }
-    res.json(rows);
-  });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("Failed to update task", error);
+    res.status(500).json({ error: "Failed to update task" });
+  }
 });
 
-app.post("/api/tasks", (req, res) => {
-  const task = req.body || {};
-  const values = [
-    task.task_id || "",
-    task.name || "",
-    task.description || "",
-    task.category || "",
-    task.priority || "",
-    task.status || "",
-    task.start_date || "",
-    task.due_date || "",
-    task.est_time || "",
-    task.act_time || "",
-    task.remarks || ""
-  ];
-
-  db.run(
-    `INSERT INTO tasks
-    (task_id, name, description, category, priority, status, start_date, due_date, est_time, act_time, remarks)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    , values,
-    function (err) {
-      if (err) {
-        res.status(500).json({ error: "Failed to create task" });
-        return;
-      }
-      db.get("SELECT * FROM tasks WHERE id = ?", [this.lastID], (getErr, row) => {
-        if (getErr) {
-          res.status(500).json({ error: "Failed to fetch created task" });
-          return;
-        }
-        res.status(201).json(row);
-      });
-    }
-  );
-});
-
-app.put("/api/tasks/:id", (req, res) => {
+app.delete("/api/tasks/:id", async (req, res) => {
   const taskId = Number(req.params.id);
   if (!taskId) {
     res.status(400).json({ error: "Invalid task id" });
     return;
   }
 
-  const task = req.body || {};
-  const values = [
-    task.task_id || "",
-    task.name || "",
-    task.description || "",
-    task.category || "",
-    task.priority || "",
-    task.status || "",
-    task.start_date || "",
-    task.due_date || "",
-    task.est_time || "",
-    task.act_time || "",
-    task.remarks || "",
-    taskId
-  ];
-
-  db.run(
-    `UPDATE tasks SET
-      task_id = ?,
-      name = ?,
-      description = ?,
-      category = ?,
-      priority = ?,
-      status = ?,
-      start_date = ?,
-      due_date = ?,
-      est_time = ?,
-      act_time = ?,
-      remarks = ?
-    WHERE id = ?`,
-    values,
-    function (err) {
-      if (err) {
-        res.status(500).json({ error: "Failed to update task" });
-        return;
-      }
-      db.get("SELECT * FROM tasks WHERE id = ?", [taskId], (getErr, row) => {
-        if (getErr) {
-          res.status(500).json({ error: "Failed to fetch updated task" });
-          return;
-        }
-        res.json(row);
-      });
-    }
-  );
-});
-
-app.delete("/api/tasks/:id", (req, res) => {
-  const taskId = Number(req.params.id);
-  if (!taskId) {
-    res.status(400).json({ error: "Invalid task id" });
-    return;
-  }
-
-  db.run("DELETE FROM tasks WHERE id = ?", [taskId], function (err) {
-    if (err) {
-      res.status(500).json({ error: "Failed to delete task" });
+  try {
+    const result = await pool.query("DELETE FROM tasks WHERE id = $1 RETURNING id", [taskId]);
+    if (!result.rows[0]) {
+      res.status(404).json({ error: "Task not found" });
       return;
     }
     res.json({ success: true });
+  } catch (error) {
+    console.error("Failed to delete task", error);
+    res.status(500).json({ error: "Failed to delete task" });
+  }
+});
+
+initDb().catch((error) => {
+  console.error("Database initialization failed", error);
+});
+
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Task tracker running on http://localhost:${PORT}`);
   });
-});
+}
 
-initDb();
-
-app.listen(PORT, () => {
-  console.log(`Task tracker running on http://localhost:${PORT}`);
-});
+module.exports = app;
