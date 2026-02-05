@@ -98,6 +98,62 @@
       backdrop-filter: blur(8px);
     }
 
+    .dashboard {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .dashboard-card {
+      background: #ffffff;
+      border-radius: 16px;
+      border: 1px solid #d9e4dd;
+      box-shadow: 0 12px 28px rgba(9, 24, 16, 0.08);
+      padding: 14px 16px;
+    }
+
+    .dashboard-title {
+      font-weight: 700;
+      font-size: 13px;
+      color: #244033;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+    }
+
+    .dashboard-pill {
+      background: #f1f6f2;
+      border: 1px solid #d7e3da;
+      border-radius: 12px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .dashboard-pill span {
+      font-size: 11px;
+      color: #5b6c61;
+    }
+
+    .dashboard-pill strong {
+      font-size: 18px;
+      color: #1f3b2e;
+    }
+
+    .chart-card canvas {
+      width: 100%;
+      height: 220px;
+      display: block;
+    }
+
     .controls input,
     .controls select,
     .controls button {
@@ -479,6 +535,7 @@
       .wrap { padding: 16px; }
       .desc { min-width: 200px; }
       .controls { grid-template-columns: 1fr; }
+      .dashboard { grid-template-columns: 1fr; }
       table { font-size: 13px; }
       .actions { flex-direction: column; }
     }
@@ -551,6 +608,22 @@
       <button id="toggleCompletedBtn" type="button">Show Done & Submitted: Off</button>
     </div>
 
+    <div class="dashboard" aria-label="Task summary dashboard">
+      <div class="dashboard-card">
+        <div class="dashboard-title">Status Totals</div>
+        <div class="dashboard-grid" id="statusTotals"></div>
+      </div>
+      <div class="dashboard-card">
+        <div class="dashboard-title">Category Totals</div>
+        <div class="dashboard-grid" id="categoryTotals"></div>
+      </div>
+      <div class="dashboard-card chart-card">
+        <div class="dashboard-title">Tasks by Status</div>
+        <canvas id="statusChart" width="520" height="220"></canvas>
+        <div class="small">Chart includes all tasks (including Done/Submitted).</div>
+      </div>
+    </div>
+
   <div class="table-wrap">
     <div class="table-title">
       <span class="tag">Project_Task_Tracker</span>
@@ -620,6 +693,9 @@
     const compactToggle = document.getElementById("compactToggle");
     const resetBtn = document.getElementById("resetBtn");
     const toggleCompletedBtn = document.getElementById("toggleCompletedBtn");
+    const statusTotals = document.getElementById("statusTotals");
+    const categoryTotals = document.getElementById("categoryTotals");
+    const statusChart = document.getElementById("statusChart");
     const detailModal = document.getElementById("detailModal");
     const detailBody = document.getElementById("detailBody");
     const detailSubtitle = document.getElementById("detailSubtitle");
@@ -699,6 +775,7 @@
       const response = await fetch(API_BASE);
       tasks = await response.json();
       refreshFilterOptions();
+      renderDashboard();
       applyFilters();
     }
 
@@ -1066,6 +1143,7 @@
       });
 
       renderRows(filtered);
+      renderDashboard();
     }
 
     searchInput.addEventListener("input", applyFilters);
@@ -1082,6 +1160,100 @@
       toggleCompletedBtn.textContent = `Show Done & Submitted: ${showCompleted ? "On" : "Off"}`;
       applyFilters();
     });
+
+    function normalizeKey(value) {
+      const clean = String(value || "").trim();
+      return clean ? clean : "Unspecified";
+    }
+
+    function buildTotalsMap(list, key) {
+      return list.reduce((acc, item) => {
+        const label = normalizeKey(item[key]);
+        acc[label] = (acc[label] || 0) + 1;
+        return acc;
+      }, {});
+    }
+
+    function renderTotals(target, totals, chipType) {
+      target.innerHTML = "";
+      const entries = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+      entries.forEach(([label, count]) => {
+        const pill = document.createElement("div");
+        pill.className = "dashboard-pill";
+        const title = document.createElement("span");
+        title.textContent = label;
+        const value = document.createElement("strong");
+        value.textContent = count;
+        pill.append(title, value);
+        target.append(pill);
+      });
+      if (entries.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "dashboard-pill";
+        empty.innerHTML = "<span>No data</span><strong>0</strong>";
+        target.append(empty);
+      }
+    }
+
+    function renderStatusChart(totals) {
+      if (!statusChart) return;
+      const ctx = statusChart.getContext("2d");
+      if (!ctx) return;
+      const labels = Object.keys(totals);
+      const values = Object.values(totals);
+      const width = statusChart.width;
+      const height = statusChart.height;
+      ctx.clearRect(0, 0, width, height);
+
+      const padding = 28;
+      const chartWidth = width - padding * 2;
+      const chartHeight = height - padding * 2;
+      const maxValue = Math.max(1, ...values);
+      const barGap = 12;
+      const barWidth = Math.max(22, (chartWidth - barGap * (labels.length - 1)) / labels.length);
+
+      ctx.strokeStyle = "#d7e3da";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padding, height - padding);
+      ctx.lineTo(width - padding, height - padding);
+      ctx.stroke();
+
+      labels.forEach((label, index) => {
+        const value = values[index];
+        const barHeight = Math.round((value / maxValue) * (chartHeight - 10));
+        const x = padding + index * (barWidth + barGap);
+        const y = height - padding - barHeight;
+        const grad = ctx.createLinearGradient(0, y, 0, y + barHeight);
+        grad.addColorStop(0, "#1f7a5b");
+        grad.addColorStop(1, "#8fbca5");
+        ctx.fillStyle = grad;
+        ctx.fillRect(x, y, barWidth, barHeight);
+
+        ctx.fillStyle = "#1b2a1f";
+        ctx.font = "12px Karla, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(String(value), x + barWidth / 2, y - 6);
+
+        ctx.fillStyle = "#5a6a5e";
+        ctx.font = "11px Karla, sans-serif";
+        ctx.fillText(label, x + barWidth / 2, height - padding + 14);
+      });
+    }
+
+    function renderDashboard() {
+      if (!tasks || tasks.length === 0) {
+        renderTotals(statusTotals, {}, "status");
+        renderTotals(categoryTotals, {}, "category");
+        renderStatusChart({});
+        return;
+      }
+      const statusTotalsMap = buildTotalsMap(tasks, "status");
+      const categoryTotalsMap = buildTotalsMap(tasks, "category");
+      renderTotals(statusTotals, statusTotalsMap, "status");
+      renderTotals(categoryTotals, categoryTotalsMap, "category");
+      renderStatusChart(statusTotalsMap);
+    }
 
     function renderDetailModal(task, editable) {
       detailBody.innerHTML = "";
